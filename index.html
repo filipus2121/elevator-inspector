@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Elevator Inspector: BLT-NS (2013)</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>🛗 ELEVATOR INSPECTOR <span class="accent">BLT-NS ’13</span></h1>
+      <p class="subtitle">Виртуальный лифт из твоего подъезда. Вид — только глазами механика, никаких разрезов.</p>
+    </div>
+    <div class="badges">
+      <span id="badgeMode" class="badge">НОРМАЛЬНАЯ РАБОТА</span>
+      <span id="badgeSafety" class="badge ok">ЦЕПЬ БЕЗ. ЦЕЛА</span>
+      <span id="badgePower" class="badge ok">ПИТАНИЕ ЕСТЬ</span>
+      <span id="badgeFloor" class="badge neutral">КАБИНА: ЭТАЖ 1</span>
+    </div>
+    <div class="topactions">
+      <label class="chk"><input type="checkbox" id="chkNeighbours"> Жители вызывают лифт</label>
+      <button id="btnMute" class="ghost">🔊 Звук</button>
+      <button id="btnReset" class="ghost">↺ Сброс дня</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="view-wrap">
+      <canvas id="view" width="960" height="620" aria-label="Вид глазами игрока"></canvas>
+      <div class="hintline">
+        Управление панелями справа доступно только там, где ты физически находишься.
+        В ревизии кнопки ВВЕРХ/ВНИЗ нужно <b>удерживать</b> мышью или пальцем.
+      </div>
+    </section>
+
+    <aside class="panel">
+      <section class="card location">
+        <h2 id="locTitle">Площадка 1-го этажа</h2>
+        <p id="locDesc"></p>
+        <div class="actions">
+          <button id="actStairsDown">⬇ По лестнице вниз</button>
+          <button id="actStairsUp">⬆ По лестнице вверх</button>
+          <button id="actTriangleOpen" class="warning">🔺 Открыть ДШ треугольником</button>
+          <button id="actTriangleClose">Отпустить ДШ (закроется доводчиком)</button>
+          <button id="actForceCarDoor">Раздвинуть двери кабины вручную</button>
+          <button id="actEnterCabin" class="primary">Войти в кабину →</button>
+          <button id="actExitCabin" class="primary">← Выйти на площадку</button>
+          <button id="actToRoof" class="warning">Шагнуть на крышу кабины</button>
+          <button id="actOffRoof" class="primary">Выйти с крыши на площадку</button>
+          <button id="actToCabinet">🔑 Открыть шкаф управления</button>
+          <button id="actFromCabinet" class="primary">← Закрыть шкаф и отойти</button>
+          <button id="actToPit" class="warning">Спуститься в приямок</button>
+          <button id="actFromPit" class="primary">↑ Подняться из приямка</button>
+        </div>
+      </section>
+
+      <section class="card" id="panelLanding">
+        <h3>Вызывной пост</h3>
+        <div class="row">
+          <button id="hallUp" class="callbtn">▲ ВВЕРХ</button>
+          <button id="hallDown" class="callbtn">▼ ВНИЗ</button>
+        </div>
+        <p id="landingHint" class="small"></p>
+      </section>
+
+      <section class="card" id="panelCabin">
+        <h3>Панель приказа — BLT-NS</h3>
+        <div id="copButtons" class="cop"></div>
+        <div class="row">
+          <button id="copDoorOpen">◀ ▶ Открыть</button>
+          <button id="copDoorClose">▶ ◀ Закрыть</button>
+          <button id="copAlarm" class="warning">🔔 Диспетчер</button>
+        </div>
+      </section>
+
+      <section class="card" id="panelRoof">
+        <h3>Пост ревизии на крыше</h3>
+        <div class="row">
+          <button id="roofModeToggle" class="toggle">Переключатель: НОРМА</button>
+          <button id="roofStopToggle" class="toggle stop">СТОП отжата</button>
+        </div>
+        <div class="row holdrow">
+          <button id="roofUp" class="holdbtn">⬆ ВВЕРХ<br><small>удерживать</small></button>
+          <button id="roofDown" class="holdbtn">⬇ ВНИЗ<br><small>удерживать</small></button>
+        </div>
+        <p id="roofHint" class="small"></p>
+      </section>
+
+      <section class="card" id="panelCabinet">
+        <h3>Шкаф управления</h3>
+        <pre id="cabinetDisplay" class="display"></pre>
+        <div class="row">
+          <button id="cabPowerToggle" class="toggle">Главный выкл.: ВКЛ</button>
+          <button id="cabServiceToggle" class="toggle">Сервис: ВЫКЛ</button>
+        </div>
+        <div class="row holdrow">
+          <button id="cabUp" class="holdbtn">⬆ Прогон вверх<br><small>удерживать</small></button>
+          <button id="cabDown" class="holdbtn">⬇ Прогон вниз<br><small>удерживать</small></button>
+        </div>
+        <p class="small">В сервисном режиме станция не отвечает на вызовы: кабина движется только с этой панели на ревизионной скорости.</p>
+      </section>
+
+      <section class="card" id="panelPit">
+        <h3>Приямок</h3>
+        <div class="row">
+          <button id="pitStopToggle" class="toggle stop">СТОП приямка отжата</button>
+        </div>
+        <p class="small">Первое правило приямка — нажми СТОП. Здесь буфера кабины и противовеса и натяжное устройство ограничителя скорости.</p>
+      </section>
+
+      <section class="card instruments">
+        <h3>🧰 Приборы механика</h3>
+        <dl>
+          <div><dt>Позиция кабины</dt><dd id="mPos">0.00 м</dd></div>
+          <div><dt>Скорость</dt><dd id="mSpeed">0.00 м/с</dd></div>
+          <div><dt>Этаж / точность</dt><dd id="mFloor">1</dd></div>
+          <div><dt>Двери кабины</dt><dd id="mDoor">закрыты</dd></div>
+          <div><dt>Задание станции</dt><dd id="mTarget">—</dd></div>
+          <div><dt>Цепь безопасности</dt><dd id="mSafety">цела</dd></div>
+          <div><dt>Пуски / пробег</dt><dd id="mStarts">0 · 0 м</dd></div>
+          <div><dt>Аварийных стопов</dt><dd id="mFaults">0</dd></div>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h3>📋 Задания инспектора</h3>
+        <ul id="tasks" class="tasks"></ul>
+      </section>
+    </aside>
+  </main>
+
+  <section class="logwrap">
+    <h3>Журнал станции и событий</h3>
+    <div id="log" class="log"></div>
+    <p class="small dim" id="cfgLine"></p>
+  </section>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
