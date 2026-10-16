@@ -47,6 +47,17 @@ button.ghost{background:transparent}
 .callbtn.lit,.copbtn.lit{background:#7a4d08;border-color:var(--accent);color:#ffd489;box-shadow:0 0 12px rgba(255,176,46,.35)}
 .cop{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:9px}
 .copbtn{text-align:center;font-weight:800;font-size:16px;padding:11px 0;border-radius:50%;aspect-ratio:1}
+.cop-display{display:flex;align-items:center;justify-content:center;gap:14px;background:#0c0f11;
+  border:1px solid #39424b;border-radius:8px;height:52px;margin-bottom:8px;overflow:hidden}
+.cop-display #copFloorNum{color:#ff4b33;font:700 34px ui-monospace,Consolas,monospace;min-width:58px;text-align:center}
+.cop-display #copArrow{color:var(--accent);font-size:26px;font-weight:900;display:inline-block;width:30px;text-align:center}
+button.alarm-yellow{width:100%;text-align:center;background:#c9a227;border-color:#f4d03f;color:#2e2405;font-weight:800;margin-bottom:10px}
+button.alarm-yellow:hover:not(:disabled){background:#dec13b}
+.service-panel{margin-top:10px;border-top:1px dashed #46535f;padding-top:10px}
+.service-panel #servicePanelToggle{width:100%;text-align:center}
+.service-switches{display:none;flex-direction:column;gap:7px;margin-top:8px}
+.service-switches.open{display:flex}
+.service-switches button{text-align:center;font-size:13px}
 .toggle.on{background:#6b4a06;border-color:var(--accent);color:#ffe2a8}
 .toggle.stop.on{background:#7e1f1f;border-color:#a53b3b;color:#fff}
 .holdbtn{font-weight:800;padding:13px 8px;text-align:center;user-select:none;-webkit-user-select:none;touch-action:none}

@@ -12,11 +12,14 @@ const canvas = $("view");
 const ctx = canvas.getContext("2d");
 
 // ---------- Состояние игрока ----------
-let location = "landing"; // landing | cabin | roof | cabinet | pit
+let location = "landing"; // landing | cabin | roof | cabinet | pit | buildingRoof
 let playerFloor = CFG.firstFloor;
-const ach = { called:false, rode:false, cabinet:false, triangle:false, roof:false, roofDrive:0, pit:false };
+const buildingMaxFloor = CFG.firstFloor + (CFG.buildingFloors ?? CFG.floors) - 1;
+const ach = { called:false, rode:false, cabinet:false, triangle:false, roof:false, roofDrive:0, pit:false, buildingRoof:false };
 let rideDistanceInside = 0;
 let neighbor = null, neighborTimer = 9;
+let servicePanelOpen = false;
+let shakeImpulse = 0;
 
 // ---------- Звук (WebAudio, запускается по первому клику) ----------
 let actx = null, motorOsc = null, motorGain = null, muted = false;
@@ -44,6 +47,11 @@ function tone(freq, dur = 0.08, gain = 0.035, when = 0, type = "sine") {
 const beep = () => tone(880, 0.07, 0.03);
 const ding = () => { tone(988, 0.16, 0.045); tone(1319, 0.2, 0.03, 0.12); };
 const clunk = () => tone(82, 0.09, 0.07, 0, "sine");
+const knockSound = (loud = false) => {
+  tone(58, loud ? 0.22 : 0.14, loud ? 0.18 : 0.1, 0, "sine");
+  tone(126, loud ? 0.12 : 0.08, loud ? 0.1 : 0.055, 0.01, "triangle");
+  if (loud) tone(52, 0.18, 0.12, 0.13, "sine");
+};
 const contactor = () => tone(180, 0.025, 0.05, 0, "square");
 
 // ---------- Утилиты геометрии ----------
@@ -85,7 +93,7 @@ $("actStairsUp").onclick = () => goStairs(+1);
 function goStairs(d) {
   if (location !== "landing") return;
   const nf = playerFloor + d;
-  if (nf < sim.minFloor || nf > sim.maxFloor) return;
+  if (nf < sim.minFloor || nf > buildingMaxFloor) return;
   if (sim.manualLandingFloor === playerFloor && sim.manualLandingOpening > 0.05) sim.closeManualLandingDoor();
   playerFloor = nf;
   sim.log(`Ты поднялся по лестнице на этаж ${playerFloor}.`.replace("поднялся", d > 0 ? "поднялся" : "спустился"));
@@ -138,6 +146,15 @@ $("actFromPit").onclick = () => {
   playerFloor = sim.minFloor; location = "landing";
   sim.log("Ты поднялся из приямка на площадку первого этажа.");
 };
+$("actToBuildingRoof").onclick = () => {
+  if (location !== "landing" || playerFloor !== CFG.roofExitFloor) return;
+  location = "buildingRoof"; ach.buildingRoof = true;
+  sim.log("Ты вышел через дверь лестницы на крышу здания. Лифт заканчивается двумя этажами ниже.");
+};
+$("actFromBuildingRoof").onclick = () => {
+  playerFloor = CFG.roofExitFloor; location = "landing";
+  sim.log(`Ты вернулся с крыши на лестницу ${CFG.roofExitFloor}-го этажа.`);
+};
 
 // Панели
 $("hallUp").onclick = () => { if (sim.registerHallCall(playerFloor, "up")) { ach.called = true; beep(); } };
@@ -150,6 +167,16 @@ $("copAlarm").onclick = () => {
   sim.log(between ? "📞 Диспетчер: «Вижу остановку между этажами. Не пытайтесь выбраться сами, механик выехал!»"
                   : "📞 Диспетчер: «Связь работает, вызов принят. Что у вас случилось?»");
 };
+$("servicePanelToggle").onclick = () => {
+  servicePanelOpen = !servicePanelOpen;
+  contactor();
+  sim.log(servicePanelOpen ? "Сервисная панель внизу поста приказа открыта ключом." : "Сервисная панель закрыта на ключ.");
+};
+$("swAttendant").onclick = () => { sim.setAttendant(!sim.attendantMode); contactor(); };
+$("swSpecial").onclick = () => { sim.setSpecialLoad(!sim.specialLoadMode); contactor(); };
+$("swDoorHold").onclick = () => { sim.setDoorHold(!sim.doorHoldMode); contactor(); };
+$("swFan").onclick = () => { sim.setFan(!sim.fanOn); contactor(); };
+$("swSpare").onclick = () => { sim.setSpare(!sim.spareSwitchOn); contactor(); };
 $("roofModeToggle").onclick = () => { sim.setRoofInspection(!sim.roofInspection); contactor(); };
 $("roofStopToggle").onclick = () => { sim.setRoofStop(!sim.roofStop); contactor(); };
 holdButton($("roofUp"), (v) => { sim.roofUpHeld = v; });
@@ -162,9 +189,9 @@ $("pitStopToggle").onclick = () => { sim.setPitStop(!sim.pitStop); contactor(); 
 $("btnMute").onclick = () => { muted = !muted; $("btnMute").textContent = muted ? "🔇 Тихо" : "🔊 Звук"; };
 $("btnReset").onclick = () => location.reload();
 $("cfgLine").textContent =
-  `Конфиг (пока временный): ${CFG.model}, ${CFG.year} г., ${CFG.floors} этажей × ${CFG.floorHeightM} м, ` +
-  `${CFG.ratedLoadKg} кг / ${CFG.ratedPersons} чел., ${CFG.ratedSpeedMps} м/с, шкаф управления на ${CFG.cabinetFloor}-м этаже. ` +
-  `Настоящие данные твоего лифта вносятся в src/config.js.`;
+  `Настоящий лифт владельца: «${CFG.nameplateName}» ${CFG.model}, выпуск ${CFG.serialNumber}, ${CFG.manufactureDate}, ` +
+  `${CFG.ratedLoadKg} кг, ${CFG.ratedSpeedMps} м/с, обслуживает этажи 1–${CFG.floors}; лестница продолжается до ${buildingMaxFloor}-го и выхода на крышу. ` +
+  `Шкаф ${CFG.controllerType} № ${CFG.controllerSerial} — ${CFG.cabinetFloor}-й этаж, справа от дверей и вызывного поста.`;
 
 // ---------- Соседи (автожители подъезда) ----------
 function tickNeighbours(dt) {
@@ -219,16 +246,27 @@ function drawFloorIndicator(cx, y, small = false) {
   ctx.font = `700 ${small ? 22 : 28}px ui-monospace, monospace`; ctx.textAlign = "center";
   ctx.fillText(sim.powerOn ? String(sim.displayFloor()) : "–", cx - 10, y + h - 9);
   if (sim.powerOn && !sim.stopped) {
+    // Анимированная стрелка направления — как на настоящем табло этого лифта
     const ax = cx + w / 2 - 20, ay = y + h / 2;
-    ctx.beginPath();
-    if (sim.carVelMps > 0) { ctx.moveTo(ax, ay - 9); ctx.lineTo(ax - 7, ay + 6); ctx.lineTo(ax + 7, ay + 6); }
-    else { ctx.moveTo(ax, ay + 9); ctx.lineTo(ax - 7, ay - 6); ctx.lineTo(ax + 7, ay - 6); }
-    ctx.fillStyle = "#ffb02e"; ctx.fill();
+    const dir = sim.carVelMps > 0 ? 1 : -1;
+    const phase = (sim.time * 1.7) % 1;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(ax - 10, y + 3, 20, h - 6); ctx.clip();
+    for (const rep of [-1, 0, 1]) {
+      const yy = ay + rep * 17 + (dir > 0 ? (0.5 - phase) * 17 : (phase - 0.5) * 17);
+      ctx.globalAlpha = 0.3 + 0.7 * Math.max(0, 1 - Math.abs(yy - ay) / 13);
+      ctx.beginPath();
+      if (dir > 0) { ctx.moveTo(ax, yy - 8); ctx.lineTo(ax - 7, yy + 5); ctx.lineTo(ax + 7, yy + 5); }
+      else { ctx.moveTo(ax, yy + 8); ctx.lineTo(ax - 7, yy - 5); ctx.lineTo(ax + 7, yy - 5); }
+      ctx.fillStyle = "#ffb02e"; ctx.fill();
+    }
+    ctx.restore(); ctx.globalAlpha = 1;
   }
 }
 
 // ---- Вид: этажная площадка ----
 function drawLanding() {
+  if (playerFloor > sim.maxFloor) { drawStairOnlyLanding(); return; } // 11–12: только лестница
   vGrad(0, 0, 960, 620, "#a39c92", "#6f6a62");
   ctx.strokeStyle = "rgba(60,56,50,.35)";
   for (let x = 0; x <= 960; x += 160) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 500); ctx.stroke(); }
@@ -237,11 +275,12 @@ function drawLanding() {
   ctx.strokeStyle = "rgba(0,0,0,.35)";
   for (let x = -80; x < 1100; x += 140) { ctx.beginPath(); ctx.moveTo(x, 500); ctx.lineTo(x - 40, 620); ctx.stroke(); }
 
-  if (playerFloor === CFG.cabinetFloor) { // шкаф управления на стене
-    vGrad(105, 165, 118, 225, "#7d858d", "#59616a");
-    ctx.strokeStyle = "#2f363d"; ctx.strokeRect(105, 165, 118, 225);
-    R(120, 182, 88, 26, "#20260f"); label("ШУ · BLT", 164, 200, 13, "#bfe07a", "center", true);
-    label("⚠ 380 В", 164, 245, 13, "#ffd489"); label("ключ у механика", 164, 280, 10, "#cfd6dd");
+  if (playerFloor === CFG.cabinetFloor) { // шкаф LCM3: справа от дверей и вызывного поста [владелец]
+    vGrad(756, 150, 140, 255, "#7d858d", "#59616a");
+    ctx.strokeStyle = "#2f363d"; ctx.strokeRect(756, 150, 140, 255);
+    R(772, 168, 108, 30, "#20260f"); label("ШУ · LCM3", 826, 189, 14, "#bfe07a", "center", true);
+    label("DHT-120363T", 826, 232, 11, "#e4e9ed"); label("(16#)", 826, 250, 11, "#e4e9ed");
+    label("⚠ 380 В", 826, 300, 13, "#ffd489"); label("справа от дверей", 826, 345, 10, "#cfd6dd");
   }
   // табличка этажа
   vGrad(135, 72, 74, 54, "#d8d3c8", "#b8b2a6");
@@ -319,9 +358,89 @@ function drawLanding() {
   label(`этаж ${playerFloor}`, 480, 592, 13, "#cfd6dd");
 }
 
+// ---- Вид: лестница выше 10-го этажа (лифт сюда не ходит) ----
+function drawStairOnlyLanding() {
+  vGrad(0, 0, 960, 620, "#979184", "#655f55");
+  ctx.strokeStyle = "rgba(60,56,50,.35)";
+  for (let x = 0; x <= 960; x += 160) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 500); ctx.stroke(); }
+  vGrad(0, 500, 960, 120, "#474440", "#2c2a27");
+  // окно на лестнице
+  const sky = ctx.createLinearGradient(0, 70, 0, 300);
+  sky.addColorStop(0, "#b8d7ea"); sky.addColorStop(1, "#e8f0e8");
+  ctx.fillStyle = sky; ctx.fillRect(118, 70, 170, 230);
+  ctx.strokeStyle = "#565e66"; ctx.lineWidth = 7; ctx.strokeRect(118, 70, 170, 230);
+  ctx.beginPath(); ctx.moveTo(203, 70); ctx.lineTo(203, 300); ctx.moveTo(118, 185); ctx.lineTo(288, 185); ctx.stroke(); ctx.lineWidth = 1;
+  label("вид с лестницы", 203, 325, 11, "#e7e1d4");
+  // перила и ступени уходящего марша
+  ctx.strokeStyle = "#39424b"; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.moveTo(48, 520); ctx.lineTo(360, 380); ctx.stroke(); ctx.lineWidth = 1;
+  for (let i = 0; i < 5; i++) {
+    const x = 55 + i * 62, y = 495 - i * 28;
+    vGrad(x, y, 78, 16, "#6d675d", "#4c4841");
+    ctx.strokeStyle = "#39424b"; ctx.beginPath(); ctx.moveTo(x + 10, y); ctx.lineTo(x + 16, y - 50); ctx.stroke();
+  }
+  vGrad(392, 70, 84, 58, "#d8d3c8", "#b8b2a6");
+  label(String(playerFloor), 434, 110, 31, "#33302a", "center", true);
+  label("лифт обслуживает этажи 1–10", 640, 250, 16, "#f0e9d8", "center", true);
+  label("выше — только по лестнице", 640, 278, 14, "#d7dee5");
+  if (playerFloor === CFG.roofExitFloor) {
+    // дверь на крышу здания
+    vGrad(600, 115, 205, 385, "#5a665f", "#35423c");
+    ctx.strokeStyle = "#202a26"; ctx.lineWidth = 4; ctx.strokeRect(600, 115, 205, 385); ctx.lineWidth = 1;
+    R(635, 142, 135, 42, "#ece7da"); label("ВЫХОД", 702, 160, 13, "#33302a", "center", true);
+    label("НА КРЫШУ", 702, 178, 13, "#33302a", "center", true);
+    ctx.beginPath(); ctx.arc(777, 315, 9, 0, Math.PI * 2); ctx.fillStyle = "#d9d2c2"; ctx.fill();
+    label("дверь на кровлю", 702, 535, 12, "#cfd6dd");
+  } else {
+    vGrad(590, 150, 220, 300, "#8b857a", "#6d675e");
+    ctx.strokeStyle = "rgba(60,56,50,.4)"; ctx.strokeRect(590, 150, 220, 300);
+    label("глухая стена", 700, 305, 13, "#48443d");
+    label("дверей шахты здесь нет", 700, 328, 11, "#5b564d");
+  }
+  label(`лестница · этаж ${playerFloor}`, 480, 592, 13, "#cfd6dd");
+}
+
+// ---- Вид: крыша здания ----
+function drawBuildingRoof() {
+  const sky = ctx.createLinearGradient(0, 0, 0, 410);
+  sky.addColorStop(0, "#83b9dd"); sky.addColorStop(0.65, "#cfe5ef"); sky.addColorStop(1, "#eef0dc");
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, 960, 410);
+  ctx.beginPath(); ctx.arc(830, 78, 34, 0, Math.PI * 2); ctx.fillStyle = "#fff3a6"; ctx.fill();
+  // силуэты соседних домов
+  for (const [x, y, w, h, c] of [[-20,230,170,190,"#7c8a94"],[140,275,150,145,"#687984"],[300,205,120,215,"#87949d"],[690,250,180,170,"#74838e"],[855,215,140,205,"#667681"]]) {
+    R(x, y, w, h, c);
+    ctx.fillStyle = "rgba(255,244,170,.72)";
+    for (let wy = y + 20; wy < y + h - 16; wy += 28) for (let wx = x + 15; wx < x + w - 15; wx += 30) if ((wx + wy) % 3 !== 0) ctx.fillRect(wx, wy, 13, 15);
+  }
+  R(430, 300, 255, 120, "#97a29d"); // зелёная полоса на горизонте
+  // кровля
+  vGrad(0, 405, 960, 215, "#686560", "#393733");
+  ctx.strokeStyle = "rgba(0,0,0,.3)";
+  for (let x = -60; x < 1050; x += 90) { ctx.beginPath(); ctx.moveTo(x, 410); ctx.lineTo(x - 55, 620); ctx.stroke(); }
+  for (const y of [455, 510, 570]) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(960, y); ctx.stroke(); }
+  // ограждение по краю
+  ctx.strokeStyle = "#2d363e"; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(0, 390); ctx.lineTo(960, 390); ctx.stroke(); ctx.lineWidth = 3;
+  for (let x = 20; x < 960; x += 55) { ctx.beginPath(); ctx.moveTo(x, 390); ctx.lineTo(x, 438); ctx.stroke(); }
+  ctx.lineWidth = 1;
+  // лестничная будка и вентканалы
+  vGrad(86, 270, 190, 180, "#918a7f", "#676158");
+  ctx.strokeStyle = "#403d37"; ctx.strokeRect(86, 270, 190, 180);
+  vGrad(138, 315, 82, 135, "#4f6259", "#314239"); label("ЛЕСТНИЦА", 179, 302, 11, "#33302a", "center", true);
+  for (const [x, h] of [[390, 105], [470, 78], [695, 92]]) {
+    vGrad(x, 430 - h, 54, h, "#7f888f", "#4d575f");
+    R(x - 8, 422 - h, 70, 14, "#39424b");
+  }
+  // бетонное завершение шахты безмашинного лифта
+  vGrad(560, 310, 150, 140, "#a09a90", "#716c63");
+  ctx.strokeStyle = "#46423c"; ctx.strokeRect(560, 310, 150, 140);
+  R(585, 335, 100, 34, "#ece7da"); label("ШАХТА", 635, 350, 11, "#33302a", "center", true); label("BLT-NS", 635, 364, 10, "#55524a");
+  label("крыша здания · лифт остаётся на этажах 1–10", 480, 598, 14, "#f0e9d8", "center", true);
+}
+
 // ---- Вид: внутри кабины (лицом к дверям) ----
 function drawCabin() {
-  const shake = Math.abs(sim.carVelMps) * 1.6;
+  const shake = Math.abs(sim.carVelMps) * 1.6 + shakeImpulse * 5;
   const dx = Math.sin(sim.time * 41) * shake, dy = Math.cos(sim.time * 53) * shake * 0.6;
   ctx.save(); ctx.translate(dx, dy);
   vGrad(-10, -10, 980, 640, sim.powerOn ? "#cfc8b8" : "#5d594f", "#8f8a7d");
@@ -332,6 +451,17 @@ function drawCabin() {
   vGrad(270, 70, 420, 48, "#e8e2cf", "#c8c1ad"); // потолок со светильником
   if (sim.powerOn) { R(415, 84, 130, 20, "#fff6d8"); }
   else { R(462, 84, 36, 16, "#ffd489"); } // аварийное освещение
+  // потолочный вентилятор из сервисной панели
+  ctx.beginPath(); ctx.arc(620, 94, 19, 0, Math.PI * 2);
+  ctx.fillStyle = sim.powerOn ? "#d8d2bf" : "#777267"; ctx.fill(); ctx.strokeStyle = "#777267"; ctx.stroke();
+  const fanA = sim.fanOn && sim.powerOn ? sim.time * 13 : 0.5;
+  ctx.strokeStyle = "#5b625f"; ctx.lineWidth = 3;
+  for (let b = 0; b < 3; b++) {
+    const a = fanA + b * Math.PI * 2 / 3;
+    ctx.beginPath(); ctx.moveTo(620, 94); ctx.lineTo(620 + Math.cos(a) * 15, 94 + Math.sin(a) * 15); ctx.stroke();
+  }
+  ctx.lineWidth = 1;
+  if (sim.fanOn && sim.powerOn) label("вентилятор", 620, 126, 9, "#5f6a63");
 
   const px = 315, py = 118, pw = 330, ph = 405;
   vGrad(px - 14, py - 12, pw + 28, ph + 14, "#5b646d", "#39424b");
@@ -352,21 +482,41 @@ function drawCabin() {
 
   // табличка завода
   R(295, 205, 126, 74, "#ece7da"); ctx.strokeStyle = "#7a766a"; ctx.strokeRect(295, 205, 126, 74);
-  label("BLT-NS", 358, 228, 14, "#33302a", "center", true);
-  label(`${CFG.ratedLoadKg} кг · ${CFG.ratedPersons} чел.`, 358, 248, 11, "#55524a");
-  label(`2013 г. · ${CFG.ratedSpeedMps} м/с`, 358, 265, 11, "#55524a");
+  label("BLT-NS", 358, 226, 14, "#33302a", "center", true);
+  label(`${CFG.ratedLoadKg} кг · ${CFG.ratedSpeedMps} м/с`, 358, 244, 11, "#55524a");
+  label(CFG.serialNumber, 358, 259, 10, "#55524a");
+  label(CFG.manufactureDate, 358, 273, 10, "#55524a");
 
-  // нарисованная панель приказа справа (живая — HTML-панель справа от вида)
-  vGrad(705, 150, 105, 330, "#aab3bb", "#78828c");
-  ctx.strokeStyle = "#39424b"; ctx.strokeRect(705, 150, 105, 330);
-  label("BLT", 757, 176, 14, "#39424b", "center", true);
+  // Панель приказа как у настоящего: сверху табло, под ним жёлтый вызов диспетчера,
+  // ниже этажи, а в самом низу — сервисная панель на ключе.
+  vGrad(705, 112, 105, 398, "#aab3bb", "#78828c");
+  ctx.strokeStyle = "#39424b"; ctx.strokeRect(705, 112, 105, 398);
+  drawFloorIndicator(757, 124, true);
+  ctx.beginPath(); ctx.arc(757, 183, 16, 0, Math.PI * 2);
+  ctx.fillStyle = "#f4d03f"; ctx.fill(); ctx.stroke();
+  label("🔔", 757, 188, 13, "#2e2405");
   let i = 0;
   for (let f = sim.maxFloor; f >= sim.minFloor; f--, i++) {
-    const cx = 732 + (i % 2) * 50, cy = 208 + Math.floor(i / 2) * 52;
-    ctx.beginPath(); ctx.arc(cx, cy, 17, 0, Math.PI * 2);
+    const cx = 732 + (i % 2) * 50, cy = 224 + Math.floor(i / 2) * 41;
+    ctx.beginPath(); ctx.arc(cx, cy, 15, 0, Math.PI * 2);
     ctx.fillStyle = sim.carCalls.has(f) ? "#ffb02e" : (sim.atFloorExact(f) ? "#79d69a" : "#525d67");
     ctx.fill(); ctx.stroke();
-    label(String(f), cx, cy + 5, 13, "#10161c", "center", true);
+    label(String(f), cx, cy + 5, 12, "#10161c", "center", true);
+  }
+  // сервисная панель внизу: закрыта крышкой или открыта ключом
+  vGrad(716, 442, 83, 56, servicePanelOpen ? "#39424b" : "#8e99a2", servicePanelOpen ? "#232b32" : "#68737d");
+  ctx.strokeStyle = "#39424b"; ctx.strokeRect(716, 442, 83, 56);
+  label("СЕРВИС", 757, 455, 9, servicePanelOpen ? "#ffd489" : "#2d353d", "center", true);
+  if (servicePanelOpen) {
+    const states = [sim.attendantMode, sim.specialLoadMode, sim.doorHoldMode, sim.fanOn, sim.spareSwitchOn];
+    states.forEach((on, k) => {
+      const sx = 726 + k * 15;
+      R(sx, 466, 10, 20, on ? "#ffb02e" : "#59636d");
+      R(sx + 2, on ? 468 : 478, 6, 6, "#e8edf1");
+    });
+  } else {
+    ctx.beginPath(); ctx.arc(757, 475, 5, 0, Math.PI * 2); ctx.fillStyle = "#2d353d"; ctx.fill();
+    label("на ключе", 757, 492, 8, "#39424b");
   }
   vGrad(0, 523, 960, 97, "#575349", "#33302b"); // пол кабины
   ctx.restore();
@@ -455,7 +605,7 @@ function drawCabinet() {
   ctx.save(); ctx.translate(603, 496); ctx.rotate(sim.powerOn ? -0.6 : 0.6);
   R(-7, -34, 14, 42, sim.powerOn ? "#ff5c5c" : "#8a4b4b"); ctx.restore();
   label("ГЛАВНЫЙ", 603, 560, 11, "#39424b", "center", true);
-  label("СТАНЦИЯ УПРАВЛЕНИЯ · BLT-NS", 480, 24, 14, "#f0e9d8", "center", true);
+  label(`ШКАФ УПРАВЛЕНИЯ ${CFG.controllerType} · ${CFG.controllerSerial}`, 480, 24, 14, "#f0e9d8", "center", true);
   R(292, 78, 82, 52, "#f4d03f"); label("⚡ 380В", 333, 110, 14, "#43370a", "center", true);
 }
 
@@ -497,6 +647,7 @@ function draw() {
   else if (location === "cabin") drawCabin();
   else if (location === "roof") drawRoof();
   else if (location === "cabinet") drawCabinet();
+  else if (location === "buildingRoof") drawBuildingRoof();
   else drawPit();
 }
 
@@ -509,6 +660,7 @@ const tasksDef = [
   ["roof", "Выйти на крышу кабины (кабина этажом ниже + треугольник)"],
   ["roofDriveDone", "Проехать на крыше в ревизии один этаж"],
   ["pit", "Спуститься в приямок (1-й этаж, треугольник, кабина выше)"],
+  ["buildingRoof", "Подняться по лестнице на 12-й этаж и выйти на крышу здания"],
 ];
 let lastTaskSig = "", lastLogCount = -1, seenEvents = 0;
 
@@ -524,8 +676,13 @@ function fmtTime(t) {
 function updateUI() {
   const mode = sim.effectiveMode();
   // шапка
-  $("badgeMode").textContent = mode === "normal" ? "НОРМАЛЬНАЯ РАБОТА" : mode === "inspection" ? "РЕВИЗИЯ / СЕРВИС" : "БЕЗ ПИТАНИЯ";
-  $("badgeMode").className = "badge" + (mode === "normal" ? " ok" : mode === "off" ? " bad" : "");
+  $("badgeMode").textContent =
+    mode === "off" ? "БЕЗ ПИТАНИЯ" :
+    mode === "inspection" ? "РЕВИЗИЯ / СЕРВИС" :
+    sim.levelingFloor !== null ? `ВЫРАВНИВАНИЕ · ЭТАЖ ${sim.levelingFloor}` :
+    sim.attendantMode ? "ЛИФТЁР" :
+    sim.specialLoadMode ? "СПЕЦЗАГРУЗКА" : "НОРМАЛЬНАЯ РАБОТА";
+  $("badgeMode").className = "badge" + (mode === "normal" && !sim.attendantMode && !sim.specialLoadMode && sim.levelingFloor === null ? " ok" : mode === "off" ? " bad" : "");
   const reasons = sim.safetyReasons();
   $("badgeSafety").textContent = reasons.length ? "ЦЕПЬ БЕЗ. РАЗОМКНУТА" : "ЦЕПЬ БЕЗ. ЦЕЛА";
   $("badgeSafety").className = "badge" + (reasons.length ? " bad" : " ok");
@@ -536,34 +693,38 @@ function updateUI() {
 
   // где мы
   const locText = {
-    landing: [`Площадка ${playerFloor}-го этажа`, landingDesc()],
+    landing: [playerFloor > sim.maxFloor ? `Лестница ${playerFloor}-го этажа` : `Площадка ${playerFloor}-го этажа`, landingDesc()],
     cabin: ["В кабине", cabinDesc()],
     roof: ["На крыше кабины", roofDesc()],
-    cabinet: [`Шкаф управления (${CFG.cabinetFloor}-й этаж)`, "Главный выключатель, сервисный режим и дисплей станции. В сервисе кабина ездит только от кнопок ниже."],
+    cabinet: [`Шкаф управления ${CFG.controllerType} (${CFG.cabinetFloor}-й этаж)`, "Шкаф стоит справа от дверей и вызывного поста. Главный выключатель, сервисный режим и дисплей станции. В сервисе кабина ездит только от кнопок ниже."],
     pit: ["В приямке", sim.pitStop ? "СТОП нажат — привод заблокирован, можно осматриваться." : "⚠ СТОП приямка ещё не нажат! В реальном мире так делать нельзя."],
+    buildingRoof: ["Крыша здания", "Ты вышел с лестницы 12-го этажа. Лифт обслуживает только 1–10; здесь кровля, вентканалы и бетонное завершение шахты без машинного помещения."],
   }[location];
   $("locTitle").textContent = locText[0];
   $("locDesc").textContent = locText[1];
 
   // действия
   const L = location === "landing";
+  const servedLanding = L && playerFloor <= sim.maxFloor;
   setBtn($("actStairsDown"), L, playerFloor > sim.minFloor);
-  setBtn($("actStairsUp"), L, playerFloor < sim.maxFloor);
+  setBtn($("actStairsUp"), L, playerFloor < buildingMaxFloor);
   const manualHere = sim.manualLandingFloor === playerFloor;
-  setBtn($("actTriangleOpen"), L && !manualHere, sim.manualLandingFloor === null);
-  setBtn($("actTriangleClose"), L && manualHere && sim.manualLandingTarget === 1);
-  setBtn($("actForceCarDoor"), L && manualHere && sim.doorZoneFloor() === playerFloor, sim.manualLandingOpening > 0.5 && sim.door < 0.9);
-  setBtn($("actEnterCabin"), L, carServesPlayerFloor());
+  setBtn($("actTriangleOpen"), servedLanding && !manualHere, sim.manualLandingFloor === null);
+  setBtn($("actTriangleClose"), servedLanding && manualHere && sim.manualLandingTarget === 1);
+  setBtn($("actForceCarDoor"), servedLanding && manualHere && sim.doorZoneFloor() === playerFloor, sim.manualLandingOpening > 0.5 && sim.door < 0.9);
+  setBtn($("actEnterCabin"), servedLanding, carServesPlayerFloor());
   setBtn($("actExitCabin"), location === "cabin", sim.stopped && sim.door > 0.7 && sim.doorZoneFloor() !== null);
-  setBtn($("actToRoof"), L, sim.stopped && manualHere && sim.manualLandingOpening > 0.7 && roofAccessibleFrom(playerFloor));
+  setBtn($("actToRoof"), servedLanding, sim.stopped && manualHere && sim.manualLandingOpening > 0.7 && roofAccessibleFrom(playerFloor));
   setBtn($("actOffRoof"), location === "roof", sim.stopped && landingAccessibleFromRoof() !== null);
-  setBtn($("actToCabinet"), L && playerFloor === CFG.cabinetFloor);
+  setBtn($("actToCabinet"), servedLanding && playerFloor === CFG.cabinetFloor);
   setBtn($("actFromCabinet"), location === "cabinet");
-  setBtn($("actToPit"), L && playerFloor === sim.minFloor, manualHere && sim.manualLandingOpening > 0.7 && sim.carPosM > 0.9);
+  setBtn($("actToPit"), servedLanding && playerFloor === sim.minFloor, manualHere && sim.manualLandingOpening > 0.7 && sim.carPosM > 0.9);
   setBtn($("actFromPit"), location === "pit", sim.stopped);
+  setBtn($("actToBuildingRoof"), L && playerFloor === CFG.roofExitFloor);
+  setBtn($("actFromBuildingRoof"), location === "buildingRoof");
 
   // панели по месту
-  $("panelLanding").style.display = L ? "" : "none";
+  $("panelLanding").style.display = servedLanding ? "" : "none";
   $("panelCabin").style.display = location === "cabin" ? "" : "none";
   $("panelRoof").style.display = location === "roof" ? "" : "none";
   $("panelCabinet").style.display = location === "cabinet" ? "" : "none";
@@ -574,6 +735,35 @@ function updateUI() {
   $("hallDown").classList.toggle("lit", sim.hallCalls.has(`${playerFloor}:down`));
   $("landingHint").textContent = landingHint();
   for (const [f, b] of copBtns) b.classList.toggle("lit", sim.carCalls.has(f));
+
+  // табло в верхней части панели приказа (цифра + анимированная стрелка)
+  $("copFloorNum").textContent = sim.powerOn ? String(sim.displayFloor()) : "–";
+  const copArrow = $("copArrow");
+  if (sim.powerOn && !sim.stopped) {
+    const up = sim.carVelMps > 0;
+    const phase = (sim.time * 1.8) % 1;
+    copArrow.textContent = up ? "▲" : "▼";
+    copArrow.style.transform = `translateY(${up ? 4 - phase * 8 : -4 + phase * 8}px)`;
+    copArrow.style.opacity = String(0.3 + 0.7 * Math.sin(phase * Math.PI));
+  } else { copArrow.textContent = sim.levelingFloor !== null ? "↕" : ""; copArrow.style.transform = ""; copArrow.style.opacity = "1"; }
+
+  // сервисная панель на ключе внизу поста приказа
+  $("servicePanelToggle").textContent = servicePanelOpen ? "🔑 Сервисная панель: открыта" : "🔑 Сервисная панель: закрыта";
+  $("servicePanelToggle").classList.toggle("on", servicePanelOpen);
+  $("serviceSwitches").classList.toggle("open", servicePanelOpen);
+  const swState = [
+    ["swAttendant", "Лифтёр", sim.attendantMode],
+    ["swSpecial", "Специальная загрузка", sim.specialLoadMode],
+    ["swDoorHold", "Удержание дверей", sim.doorHoldMode],
+    ["swFan", "Вентилятор", sim.fanOn],
+    ["swSpare", "Запасной", sim.spareSwitchOn],
+  ];
+  for (const [id, lbl, on] of swState) {
+    const el = $(id);
+    el.textContent = `${lbl}: ${on ? "ВКЛ" : "ВЫКЛ"}`;
+    el.classList.toggle("on", on);
+    el.disabled = !servicePanelOpen;
+  }
 
   // крыша
   $("roofModeToggle").textContent = `Переключатель: ${sim.roofInspection ? "РЕВИЗИЯ" : "НОРМА"}`;
@@ -587,13 +777,21 @@ function updateUI() {
   $("cabServiceToggle").textContent = `Сервис: ${sim.cabinetService ? "ВКЛ" : "ВЫКЛ"}`;
   $("cabServiceToggle").classList.toggle("on", sim.cabinetService);
   $("cabinetDisplay").className = "display" + (sim.powerOn ? "" : " off");
+  const serviceSwitchState = [
+    sim.attendantMode ? "лифтёр" : null,
+    sim.specialLoadMode ? "спецзагрузка" : null,
+    sim.doorHoldMode ? "удержание дверей" : null,
+    sim.fanOn ? "вентилятор" : null,
+    sim.spareSwitchOn ? "запасной" : null,
+  ].filter(Boolean);
   $("cabinetDisplay").textContent = sim.powerOn
-    ? `${CFG.model}  этаж: ${sim.displayFloor()}\n` +
-      `режим: ${mode === "normal" ? "НОРМАЛЬНАЯ" : "РЕВИЗИЯ/СЕРВИС"}\n` +
+    ? `${CFG.controllerType} · ${CFG.controllerSerial}\n` +
+      `этаж: ${sim.displayFloor()}   режим: ${sim.levelingFloor !== null ? "ВЫРАВНИВАНИЕ" : mode === "normal" ? "НОРМАЛЬНАЯ" : "РЕВИЗИЯ/СЕРВИС"}\n` +
       `скорость: ${sim.carVelMps.toFixed(2)} м/с   двери: ${doorWord()}\n` +
       `цепь без.: ${reasons.length ? "РАЗОМКНУТА — " + reasons.join("; ") : "OK"}\n` +
-      `задание: ${sim.targetFloor ?? "—"}   вызовы: ${sim.hallCalls.size}  приказы: ${sim.carCalls.size}`
-    : "[ дисплей погашен — нет питания ]";
+      `задание: ${sim.levelingFloor !== null ? `выравнивание ${sim.levelingFloor}, ${sim.levelingRemainingS.toFixed(1)} с` : sim.targetFloor ?? "—"}   вызовы: ${sim.hallCalls.size}  приказы: ${sim.carCalls.size}\n` +
+      `сервис-панель кабины: ${serviceSwitchState.length ? serviceSwitchState.join(", ") : "все переключатели выкл"}`
+    : "[ дисплей LCM3 погашен — нет питания ]";
   // приямок
   $("pitStopToggle").textContent = sim.pitStop ? "СТОП приямка НАЖАТА" : "СТОП приямка отжата";
   $("pitStopToggle").classList.toggle("on", sim.pitStop);
@@ -604,7 +802,9 @@ function updateUI() {
   const offMm = Math.round((sim.carPosM - sim.floorPosM(sim.nearestFloor())) * 1000);
   $("mFloor").textContent = `${sim.displayFloor()} (${offMm >= 0 ? "+" : ""}${offMm} мм)`;
   $("mDoor").textContent = doorWord();
-  $("mTarget").textContent = sim.targetFloor === null ? "—" : `этаж ${sim.targetFloor}${sim.targetIsRescue ? " (доводка)" : ""}`;
+  $("mTarget").textContent = sim.levelingFloor !== null
+    ? `этаж ${sim.levelingFloor} (выравнивание ${sim.levelingRemainingS.toFixed(1)} с)`
+    : sim.targetFloor === null ? "—" : `этаж ${sim.targetFloor}${sim.targetIsRescue ? " (доводка)" : ""}`;
   $("mSafety").textContent = reasons.length ? reasons.join("; ") : "цела";
   $("mStarts").textContent = `${sim.starts} · ${sim.distanceM >= 1000 ? (sim.distanceM / 1000).toFixed(2) + " км" : Math.round(sim.distanceM) + " м"}`;
   $("mFaults").textContent = String(sim.emergencyStops);
@@ -628,6 +828,14 @@ function updateUI() {
     const e = sim.events[seenEvents++];
     if (e.kind === "ding" && (location === "cabin" || (location === "landing" && sim.doorZoneFloor() === playerFloor))) ding();
     if (e.kind === "alarm") { tone(440, 0.12, 0.05); tone(440, 0.12, 0.05, 0.16); }
+    if (e.kind === "knock1") {
+      knockSound(false);
+      if (location === "cabin") shakeImpulse = Math.max(shakeImpulse, 0.7);
+    }
+    if (e.kind === "knock10") {
+      knockSound(true);
+      if (location === "cabin" || location === "roof") shakeImpulse = Math.max(shakeImpulse, 1.35);
+    }
   }
 }
 
@@ -636,6 +844,12 @@ function doorWord() {
            open: "открыты", closing: `закрываются ${Math.round(sim.door * 100)}%` }[sim.doorState];
 }
 function landingDesc() {
+  if (playerFloor > sim.maxFloor) {
+    return playerFloor === CFG.roofExitFloor
+      ? "Лестница заканчивается дверью на крышу здания. Дверей шахты и вызовов здесь нет: лифт ходит только между 1-м и 10-м этажами."
+      : "Обычный лестничный пролёт выше зоны обслуживания лифта. Спустись на 10-й, если нужен BLT-NS или его шкаф LCM3.";
+  }
+  if (sim.levelingFloor === playerFloor) return `Кабина уже подошла к ${playerFloor}-му этажу, но ещё ${sim.levelingRemainingS.toFixed(1)} с выравнивается. Двери откроются только в самом конце — фирменная особенность этого лифта.`;
   if (sim.manualLandingFloor === playerFloor && sim.manualLandingOpening > 0.5) {
     const rel = relToPlayerFloorM();
     if (Math.abs(rel) <= 0.26) return "ДШ открыта треугольником. Кабина стоит у этажа — за дверями шахты двери кабины.";
@@ -647,7 +861,8 @@ function landingDesc() {
   return "Обычная площадка. Вызывной пост справа, отверстие под треугольный ключ — на правой створке ДШ.";
 }
 function cabinDesc() {
-  if (!sim.stopped) return `Едем. Скорость ${Math.abs(sim.carVelMps).toFixed(2)} м/с — следи за индикатором и звуком проходящих этажей.`;
+  if (sim.levelingFloor !== null) return `Почти приехали на ${sim.levelingFloor}-й: после громкого стука кабина ещё ${sim.levelingRemainingS.toFixed(1)} с медленно выравнивается. Голосовых объявлений не будет — у этого лифта их нет.`;
+  if (!sim.stopped) return `Едем. Скорость ${Math.abs(sim.carVelMps).toFixed(2)} м/с — следи за анимированной стрелкой табло и звуком проходящих этажей.`;
   if (sim.door > 0.7) return `Стоим с открытыми дверьми на этаже ${sim.displayFloor()}.`;
   return sim.powerOn ? "Стоим с закрытыми дверьми. Нажми этаж на панели приказа."
                       : "Питания нет, горит аварийный свет. Хорошо, что это только игра.";
@@ -666,6 +881,9 @@ function roofHint() {
 }
 function landingHint() {
   if (!sim.powerOn) return "Питания у станции нет — вызовы не регистрируются. Питание включается из шкафа управления.";
+  if (sim.specialLoadMode) return "В кабине включена «Специальная загрузка»: LCM3 вызовы с этажей не принимает, кабина работает только по приказам.";
+  if (sim.attendantMode) return "В кабине включён режим «Лифтёр»: вызов загорится и зарегистрируется, но кабина поедет только когда лифтёр задаст этаж на панели приказа.";
+  if (sim.levelingFloor === playerFloor) return `Кабина выравнивается у этого этажа ещё ${sim.levelingRemainingS.toFixed(1)} с. Подожди — двери пока намеренно не открываются.`;
   if (sim.effectiveMode() === "inspection") return "Станция в ревизии/сервисе: вызовы зажигаются, но кабина по ним не поедет.";
   if (sim.manualLandingFloor !== null && sim.manualLandingOpening > 0.03)
     return `Цепь безопасности разомкнута ДШ этажа ${sim.manualLandingFloor} — в нормальной работе лифт не поедет, пока дверь не защёлкнется.`;
@@ -681,6 +899,7 @@ function frame(ts) {
   const posBefore = sim.carPosM;
   while (rest > 0) { const step = Math.min(rest, 0.01); sim.tick(step); rest -= step; }
   tickNeighbours(dtAll);
+  shakeImpulse = Math.max(0, shakeImpulse - dtAll * 2.2);
 
   if (location === "cabin") {
     rideDistanceInside += Math.abs(sim.carPosM - posBefore);

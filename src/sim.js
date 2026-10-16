@@ -20,6 +20,13 @@ export class ElevatorSim {
     this.lastDirection = 1;
     this.targetFloor = null;
     this.targetIsRescue = false;
+    this.targetUseTopLeveling = false; // фиксируется один раз при выборе задания на верхний этаж
+
+    // --- Долгое выравнивание на верхнем этаже (особенность этого лифта)
+    this.levelingFloor = null;
+    this.levelingRemainingS = 0;
+    this.levelingDurationS = 0;
+    this.levelingStartPosM = 0;
 
     // --- Двери кабины (0 = закрыты, 1 = полностью открыты)
     this.door = 0;
@@ -44,6 +51,13 @@ export class ElevatorSim {
     this.roofStop = false;       // кнопка СТОП на крыше
     this.pitStop = false;        // кнопка СТОП в приямке
 
+    // --- Сервисная панель на ключе внизу поста приказа [данные владельца]
+    this.attendantMode = false;  // «Лифтёр»: вызовы только регистрируются, едем по приказам, двери сами не закрываются
+    this.specialLoadMode = false; // «Специальная загрузка»: вызовы с этажей не принимаются, двери стоят дольше
+    this.doorHoldMode = false;   // «Удержание дверей»: открытые двери не закрываются автоматически
+    this.fanOn = false;          // «Вентилятор» в кабине
+    this.spareSwitchOn = false;  // «Запасной»: пока ни к чему не подключён
+
     // --- Удерживаемые кнопки ревизии (их ставит интерфейс)
     this.roofUpHeld = false; this.roofDownHeld = false;
     this.cabinetUpHeld = false; this.cabinetDownHeld = false;
@@ -56,7 +70,8 @@ export class ElevatorSim {
     this.events = [];
     this._lowLimitLogged = false;
     this._highLimitLogged = false;
-    this.log(`Станция ${cfg.model} включена. Самотестирование OK, кабина на этаже ${cfg.firstFloor}.`);
+    this._knock1Armed = false;
+    this.log(`Шкаф ${cfg.controllerType ?? cfg.model} включён. Самотестирование OK, кабина на этаже ${cfg.firstFloor}.`);
   }
 
   // ---------- Геометрия шахты ----------
@@ -122,14 +137,21 @@ export class ElevatorSim {
     if (!this.validFloor(floor) || !this.powerOn) return false;
     if (dir === "up" && floor === this.maxFloor) return false;
     if (dir === "down" && floor === this.minFloor) return false;
+    if (this.specialLoadMode) {
+      this.log(`Вызов с этажа ${floor} не принят: включена «Специальная загрузка».`, "warn");
+      return false;
+    }
     if (this._servingFloorNow(floor)) return true;
     this.hallCalls.add(`${floor}:${dir}`);
-    this.log(`Вызов: этаж ${floor} ${dir === "up" ? "▲" : "▼"}.`);
+    this.log(`Вызов: этаж ${floor} ${dir === "up" ? "▲" : "▼"}${this.attendantMode ? " (зарегистрирован, лифтёр решит сам)" : ""}.`);
     return true;
+  }
+  effectiveDoorDwellS() {
+    return this.specialLoadMode ? (this.cfg.specialLoadDoorDwellS ?? this.cfg.doorDwellTimeS) : this.cfg.doorDwellTimeS;
   }
   _servingFloorNow(floor) {
     if (this.stopped && this.atFloorExact(floor) && (this.doorState === "open" || this.doorState === "opening")) {
-      this.doorTimerS = Math.max(this.doorTimerS, this.cfg.doorDwellTimeS); // продлеваем стоянку
+      this.doorTimerS = Math.max(this.doorTimerS, this.effectiveDoorDwellS()); // продлеваем стоянку
       return true;
     }
     return false;
@@ -138,6 +160,11 @@ export class ElevatorSim {
     const s = new Set(this.carCalls);
     for (const k of this.hallCalls) s.add(Number(k.split(":")[0]));
     return [...s];
+  }
+  /** Что станция реально обслужит автоматически с учётом «Лифтёра» и «Спецзагрузки». */
+  dispatchableFloors() {
+    if (this.attendantMode || this.specialLoadMode) return [...this.carCalls];
+    return this.requestedFloors();
   }
   clearFloorRequests(floor) {
     this.carCalls.delete(floor);
@@ -150,7 +177,7 @@ export class ElevatorSim {
     if (!this.stopped || this.doorZoneFloor() === null) return false;
     if (!manual && !this.powerOn) return false;
     if (this.doorState === "open" || this.doorState === "opening") {
-      this.doorTimerS = Math.max(this.doorTimerS, this.cfg.doorDwellTimeS);
+      this.doorTimerS = Math.max(this.doorTimerS, this.effectiveDoorDwellS());
       return true;
     }
     const wasClosed = this.doorState === "closed";
@@ -199,6 +226,9 @@ export class ElevatorSim {
     }
     this.targetFloor = null;
     this.targetIsRescue = false;
+    this.targetUseTopLeveling = false;
+    this.levelingFloor = null;
+    this.levelingRemainingS = 0;
   }
   setPower(on) {
     if (this.powerOn === on) return;
@@ -231,6 +261,41 @@ export class ElevatorSim {
     this.log(on ? "СТОП в приямке НАЖАТ — привод заблокирован." : "СТОП в приямке отжата.", on ? "warn" : "info");
   }
 
+  // ---------- Сервисная панель кабины (на ключе) ----------
+  setAttendant(on) {
+    if (this.attendantMode === on) return;
+    this.attendantMode = on;
+    this.log(on
+      ? "Сервисная панель: «Лифтёр» ВКЛ. Вызовы только регистрируются лампами; кабина едет по приказам, двери закрывает лифтёр кнопкой."
+      : "Сервисная панель: «Лифтёр» ВЫКЛ — снова автоматическая работа по вызовам.");
+  }
+  setSpecialLoad(on) {
+    if (this.specialLoadMode === on) return;
+    this.specialLoadMode = on;
+    if (on) {
+      this.hallCalls.clear();
+      if (this.doorState === "open") this.doorTimerS = Math.max(this.doorTimerS, this.effectiveDoorDwellS());
+      this.log("Сервисная панель: «Специальная загрузка» ВКЛ. Вызовы с этажей сброшены и не принимаются; двери на остановках стоят дольше.");
+    } else this.log("Сервисная панель: «Специальная загрузка» ВЫКЛ.");
+  }
+  setDoorHold(on) {
+    if (this.doorHoldMode === on) return;
+    this.doorHoldMode = on;
+    this.log(on
+      ? "Сервисная панель: «Удержание дверей» ВКЛ — открытые двери сами не закроются."
+      : "Сервисная панель: «Удержание дверей» ВЫКЛ.");
+  }
+  setFan(on) {
+    if (this.fanOn === on) return;
+    this.fanOn = on;
+    this.log(on ? "Сервисная панель: вентилятор кабины включён." : "Сервисная панель: вентилятор выключен.");
+  }
+  setSpare(on) {
+    if (this.spareSwitchOn === on) return;
+    this.spareSwitchOn = on;
+    this.log(`Сервисная панель: «Запасной» переключён в ${on ? "ВКЛ" : "ВЫКЛ"}… и ничего не произошло. Он и правда запасной.`);
+  }
+
   // ---------- Главный шаг ----------
   tick(dt) {
     if (dt <= 0) return;
@@ -246,16 +311,25 @@ export class ElevatorSim {
     else if (mode === "normal") this._tickNormal(dt);
     else this._brake(dt, this.cfg.emergencyDecelMps2); // без питания — только тормоз
 
+    // Фирменный характер: стук при подъёме именно с 1-го этажа
+    if (wasMoving === false && this.atFloorExact(this.minFloor)) this._knock1Armed = true;
+    if (this._knock1Armed && this.cfg.knockDepartingFirstFloor && this.carVelMps > 0.05 && this.carPosM >= 0.35) {
+      this.log("ТУК! Характерный стук при подъёме с 1-го этажа — он у этого лифта всегда такой.", "knock1");
+      this._knock1Armed = false;
+    }
+    if (this.stopped && !this.atFloorExact(this.minFloor)) this._knock1Armed = false;
+
     this.distanceM += Math.abs(this.carPosM - prevPos);
     if (!wasMoving && !this.stopped) this.starts++;
   }
 
   _tickNormal(dt) {
     if (!this.canRunNormal()) {
-      if (!this.stopped && this.targetFloor !== null) this._tripEmergency(this.safetyReasons()[0] ?? "цепь безопасности разомкнута");
+      if (!this.stopped && (this.targetFloor !== null || this.levelingFloor !== null)) this._tripEmergency(this.safetyReasons()[0] ?? "цепь безопасности разомкнута");
       this._brake(dt, this.cfg.emergencyDecelMps2);
       return;
     }
+    if (this.levelingFloor !== null) { this._tickLeveling(dt); return; }
     if (this.targetFloor === null && this.stopped) this._chooseNextTarget();
     if (this.targetFloor !== null) this._moveTowardTarget(dt);
     else this._brake(dt, this.cfg.accelerationMps2);
@@ -268,10 +342,11 @@ export class ElevatorSim {
     if (!this.atFloorExact(nearest)) {
       this.targetFloor = nearest;
       this.targetIsRescue = true;
+      this.targetUseTopLeveling = false;
       this.log(`Доводка: станция везёт кабину на ближайший этаж ${nearest} на малой скорости.`);
       return;
     }
-    const req = this.requestedFloors();
+    const req = this.dispatchableFloors();
     if (req.length === 0) return;
     if (req.includes(nearest)) { this.clearFloorRequests(nearest); this.doorOpenCommand(); return; }
     const ahead = req.filter(f => Math.sign(this.floorPosM(f) - this.carPosM) === this.lastDirection);
@@ -279,11 +354,20 @@ export class ElevatorSim {
     pool.sort((a, b) => Math.abs(this.floorPosM(a) - this.carPosM) - Math.abs(this.floorPosM(b) - this.carPosM));
     this.targetFloor = pool[0];
     this.targetIsRescue = false;
+    // Решение о долгом выравнивании принимаем ЗДЕСЬ, один раз на всю поездку.
+    // Если пересчитывать его на ходу, условие по расстоянию само выключится у цели.
+    this.targetUseTopLeveling = this.targetFloor === this.maxFloor &&
+      (this.cfg.topFloorLevelingS ?? 0) > 0 &&
+      this.floorPosM(this.targetFloor) - this.carPosM > (this.cfg.topFloorLevelingOffsetM ?? 0) + 0.05;
     this.lastDirection = this.floorPosM(this.targetFloor) > this.carPosM ? 1 : -1;
   }
 
   _moveTowardTarget(dt) {
-    const targetPos = this.floorPosM(this.targetFloor);
+    const finalPos = this.floorPosM(this.targetFloor);
+    // На верхнем этаже этот лифт сначала встаёт ниже уровня и потом долго выравнивается
+    const levelingOffset = this.cfg.topFloorLevelingOffsetM ?? 0;
+    const useTopLeveling = this.targetUseTopLeveling && this.targetFloor === this.maxFloor && !this.targetIsRescue;
+    const targetPos = useTopLeveling ? finalPos - levelingOffset : finalPos;
     const dist = targetPos - this.carPosM;
     const vmax = this.targetIsRescue ? this.cfg.rescueSpeedMps : this.cfg.ratedSpeedMps;
     const a = this.cfg.accelerationMps2;
@@ -298,11 +382,44 @@ export class ElevatorSim {
       this.carPosM = targetPos;
       this.carVelMps = 0;
       const arrived = this.targetFloor;
-      this.targetFloor = null; this.targetIsRescue = false;
-      this.clearFloorRequests(arrived);
-      this.doorOpenCommand();
+      this.targetFloor = null; this.targetIsRescue = false; this.targetUseTopLeveling = false;
+      if (useTopLeveling) this._startTopFloorLeveling(arrived);
+      else { this.clearFloorRequests(arrived); this.doorOpenCommand(); }
     } else {
       this.carPosM = newPos;
+    }
+  }
+
+  _startTopFloorLeveling(floor) {
+    this.levelingFloor = floor;
+    this.levelingDurationS = this.cfg.topFloorLevelingS;
+    this.levelingRemainingS = this.levelingDurationS;
+    this.levelingStartPosM = this.carPosM;
+    const offMm = Math.round(Math.abs(this.floorPosM(floor) - this.carPosM) * 1000);
+    this.log(this.cfg.loudKnockTopFloor
+      ? `БАМ! Очень громкий стук на ${floor}-м этаже. Кабина встала на ${offMm} мм ниже и начала своё долгое выравнивание…`
+      : `Этаж ${floor}: начато выравнивание с отклонением ${offMm} мм.`, "knock10");
+  }
+
+  _tickLeveling(dt) {
+    const floor = this.levelingFloor;
+    const finalPos = this.floorPosM(floor);
+    this.levelingRemainingS = Math.max(0, this.levelingRemainingS - dt);
+    const elapsed = this.levelingDurationS - this.levelingRemainingS;
+    const p = clamp(elapsed / this.levelingDurationS, 0, 1);
+    const eased = p * p * (3 - 2 * p);
+    const residual = (this.levelingStartPosM - finalPos) * (1 - eased);
+    const hunting = Math.sin(elapsed * 2.1) * 0.004 * (1 - p); // лёгкая «охота» вокруг уровня
+    const newPos = finalPos + residual + hunting;
+    this.carVelMps = dt > 0 ? (newPos - this.carPosM) / dt : 0;
+    this.carPosM = newPos;
+    if (this.levelingRemainingS <= 0) {
+      this.carPosM = finalPos;
+      this.carVelMps = 0;
+      this.levelingFloor = null;
+      this.log(`Выравнивание на ${floor}-м завершено: заняло ${this.levelingDurationS.toFixed(0)} с, теперь точно ±0 мм.`);
+      this.clearFloorRequests(floor);
+      this.doorOpenCommand();
     }
   }
 
@@ -345,9 +462,9 @@ export class ElevatorSim {
     const powered = this.powerOn || this.doorManualMotion;
     if (this.doorState === "opening" && powered) {
       this.door = clamp(this.door + dt / this.cfg.doorOpenTimeS, 0, 1);
-      if (this.door >= 1) { this.doorState = "open"; this.doorTimerS = this.cfg.doorDwellTimeS; }
+      if (this.door >= 1) { this.doorState = "open"; this.doorTimerS = this.effectiveDoorDwellS(); }
     } else if (this.doorState === "open") {
-      if (!this.doorManualHold && this.powerOn) {
+      if (!this.doorManualHold && this.powerOn && !this.doorHoldMode && !this.attendantMode) {
         this.doorTimerS -= dt;
         if (this.doorTimerS <= 0) this.doorCloseCommand();
       }

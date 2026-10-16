@@ -80,4 +80,47 @@ function runUntil(sim, predicate, maxSeconds = 30) {
   console.log("✓ отключение питания: тормоз → доводка");
 }
 
+// 5) Фирменный характер: стук с 1-го, долгое выравнивание и громкий стук на 10-м
+{
+  const sim = new ElevatorSim(ELEVATOR);
+  sim.registerCarCall(10);
+  assert.ok(runUntil(sim, () => sim.levelingFloor === 10, 45), "на 10-м должно начаться долгое выравнивание");
+  assert.ok(sim.events.some(e => e.kind === "knock1"), "при подъёме с 1-го должен быть характерный стук");
+  assert.ok(sim.events.some(e => e.kind === "knock10"), "на 10-м должен быть громкий стук");
+  assert.ok(sim.door < 0.1, "во время выравнивания двери закрыты");
+  assert.ok(Math.abs(sim.carPosM - sim.floorPosM(10)) > 0.045, "сначала кабина встаёт заметно ниже уровня 10-го");
+  run(sim, 5);
+  assert.equal(sim.levelingFloor, 10, "через 5 с выравнивание ещё должно идти");
+  assert.ok(runUntil(sim, () => sim.door > 0.9, 8), "после ~8 с выравнивания двери открываются");
+  assert.ok(Math.abs(sim.carPosM - sim.floorPosM(10)) < 0.002, "в конце выравнивания — точный уровень");
+  console.log("✓ характер лифта: стук с 1-го, 8 с выравнивания и БАМ на 10-м");
+}
+
+// 6) Сервисная панель кабины: Лифтёр / Спецзагрузка / Удержание дверей / Вентилятор / Запасной
+{
+  const sim = new ElevatorSim(ELEVATOR);
+  sim.setAttendant(true);
+  assert.ok(sim.registerHallCall(6, "up"), "в режиме Лифтёр вызов регистрируется");
+  run(sim, 4);
+  assert.ok(sim.carPosM === 0 && sim.targetFloor === null, "в режиме Лифтёр по одному вызову кабина не едет");
+  sim.registerCarCall(6);
+  assert.ok(runUntil(sim, () => sim.door > 0.9, 35), "по приказу лифтёра кабина приезжает");
+  run(sim, ELEVATOR.doorDwellTimeS + 3);
+  assert.ok(sim.door > 0.9, "в режиме Лифтёр двери не закрываются сами");
+  sim.setAttendant(false);
+  sim.doorCloseCommand();
+
+  const sim2 = new ElevatorSim(ELEVATOR);
+  sim2.setSpecialLoad(true);
+  assert.equal(sim2.registerHallCall(4, "up"), false, "при Спецзагрузке вызовы с этажей не принимаются");
+  sim2.setDoorHold(true);
+  sim2.registerCarCall(2);
+  assert.ok(runUntil(sim2, () => sim2.door > 0.9, 20), "приказ при Спецзагрузке выполняется");
+  run(sim2, ELEVATOR.specialLoadDoorDwellS + 2);
+  assert.ok(sim2.door > 0.9, "Удержание дверей не даёт дверям закрыться даже после увеличенной стоянки");
+  sim2.setFan(true); sim2.setSpare(true);
+  assert.ok(sim2.fanOn && sim2.spareSwitchOn, "Вентилятор и Запасной переключаются");
+  console.log("✓ сервисная панель: все пять переключателей работают");
+}
+
 console.log("\nВсе тесты модели лифта пройдены.");

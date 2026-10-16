@@ -52,6 +52,8 @@
           <button id="actFromCabinet" class="primary">← Закрыть шкаф и отойти</button>
           <button id="actToPit" class="warning">Спуститься в приямок</button>
           <button id="actFromPit" class="primary">↑ Подняться из приямка</button>
+          <button id="actToBuildingRoof">Выйти на крышу здания</button>
+          <button id="actFromBuildingRoof" class="primary">← Вернуться на лестницу 12-го этажа</button>
         </div>
       </section>
 
@@ -66,11 +68,25 @@
 
       <section class="card" id="panelCabin">
         <h3>Панель приказа — BLT-NS</h3>
+        <div class="cop-display" aria-label="Табло этажа в кабине">
+          <span id="copFloorNum">1</span><span id="copArrow"></span>
+        </div>
+        <button id="copAlarm" class="alarm-yellow">🔔 Вызов диспетчера</button>
         <div id="copButtons" class="cop"></div>
         <div class="row">
           <button id="copDoorOpen">◀ ▶ Открыть</button>
           <button id="copDoorClose">▶ ◀ Закрыть</button>
-          <button id="copAlarm" class="warning">🔔 Диспетчер</button>
+        </div>
+        <div class="service-panel">
+          <button id="servicePanelToggle" class="toggle">🔑 Сервисная панель: закрыта</button>
+          <div id="serviceSwitches" class="service-switches">
+            <button id="swAttendant" class="toggle">Лифтёр: ВЫКЛ</button>
+            <button id="swSpecial" class="toggle">Специальная загрузка: ВЫКЛ</button>
+            <button id="swDoorHold" class="toggle">Удержание дверей: ВЫКЛ</button>
+            <button id="swFan" class="toggle">Вентилятор: ВЫКЛ</button>
+            <button id="swSpare" class="toggle">Запасной: ВЫКЛ</button>
+            <p class="small">Панель внизу поста приказа, открывается ключом — как в настоящей кабине.</p>
+          </div>
         </div>
       </section>
 
@@ -88,7 +104,7 @@
       </section>
 
       <section class="card" id="panelCabinet">
-        <h3>Шкаф управления</h3>
+        <h3>Шкаф управления LCM3</h3>
         <pre id="cabinetDisplay" class="display"></pre>
         <div class="row">
           <button id="cabPowerToggle" class="toggle">Главный выкл.: ВКЛ</button>
